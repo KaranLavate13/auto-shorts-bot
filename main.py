@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import random
 import asyncio
 import requests
@@ -87,13 +88,29 @@ def generate_content():
 
 async def generate_voiceover(text, output_file="voice.mp3"):
     print("Generating Hindi voiceover with Edge-TTS...")
-    # Indian Hindi Male Narrator Voice
-    communicate = edge_tts.Communicate(text, "hi-IN-MadhurNeural")
-    await communicate.save(output_file)
+    
+    # Strip quotes, dashes, and special characters that break Edge-TTS SSML parsing
+    clean_text = re.sub(r"['\"`“”‘’\-\[\]\(\)\{\}\!]", " ", text)
+    clean_text = " ".join(clean_text.split())
+    
+    voices = ["hi-IN-MadhurNeural", "hi-IN-SwaraNeural"]
+    
+    for voice in voices:
+        try:
+            print(f"Trying voice: {voice}...")
+            communicate = edge_tts.Communicate(clean_text, voice)
+            await communicate.save(output_file)
+            
+            if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+                print(f"Voiceover successfully generated using {voice}.")
+                return
+        except Exception as e:
+            print(f"Voice {voice} failed with error: {e}")
+            
+    raise RuntimeError("Failed to generate voiceover with all available Hindi voices.")
 
 def download_trending_bgm(output_file="trending_bgm.mp3"):
     print("Downloading royalty-free dramatic instrumental BGM...")
-    # Direct reliable royalty-free dramatic BGM audio links
     bgm_urls = [
         "[https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a7322d.mp3](https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a7322d.mp3)",
         "[https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3](https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3)",
@@ -118,7 +135,6 @@ def download_trending_bgm(output_file="trending_bgm.mp3"):
         return False
 
 def download_background_video(search_term, output_file="background.mp4"):
-    # Ensure clean, URL-safe search term
     clean_term = urllib.parse.quote(search_term)
     print(f"Searching Pexels for stock footage: {search_term} (URL encoded: {clean_term})...")
     
