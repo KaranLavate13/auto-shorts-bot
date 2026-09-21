@@ -4,9 +4,8 @@ import json
 import random
 import asyncio
 import requests
-import subprocess
+import urllib.parse
 import edge_tts
-from google import genai
 from moviepy.editor import (
     VideoFileClip, 
     AudioFileClip, 
@@ -15,6 +14,7 @@ from moviepy.editor import (
     concatenate_audioclips
 )
 
+from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -47,7 +47,7 @@ def generate_content():
     Return strictly valid JSON format with keys:
     - "title": catchy title in Hindi/Hinglish with hashtags (e.g. #Mahabharat #Krishna #Spiritual #Shorts)
     - "description": summary in Hindi with relevant hashtags
-    - "search_term": 1 or 2 word ENGLISH search term for Pexels background video matching the scene (e.g. 'warrior', 'temple', 'chariot', 'sunset', 'fire')
+    - "search_term": single 1-word ENGLISH string for Pexels background video matching the scene (e.g. warrior, temple, chariot, sunset, fire)
     - "script": captivating storytelling voiceover text written STRICTLY IN DEVANAGARI HINDI (हिंदी script) (approx 50-65 words). Ensure natural Hindi grammar.
     
     Do not add markdown formatting or extra text outside JSON.
@@ -65,19 +65,25 @@ def generate_content():
     if not res or not res.text:
         raise RuntimeError("gemini-3.6-flash returned an empty response.")
 
-    response_text = res.text
+    response_text = res.text.strip()
 
     # Clean JSON response if wrapped in markdown fences
-    cleaned = response_text.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:]
-    if cleaned.startswith("```"):
-        cleaned = cleaned[3:]
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3]
+    if response_text.startswith("```json"):
+        response_text = response_text[7:]
+    if response_text.startswith("```"):
+        response_text = response_text[3:]
+    if response_text.endswith("```"):
+        response_text = response_text[:-3]
     
-    data = json.loads(cleaned.strip())
-    return data["title"], data["description"], data["search_term"], data["script"]
+    data = json.loads(response_text.strip())
+    
+    # Clean search_term string to avoid list/bracket issues
+    search_term = data.get("search_term", "temple")
+    if isinstance(search_term, list):
+        search_term = " ".join(search_term)
+    search_term = str(search_term).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
+    
+    return data["title"], data["description"], search_term, data["script"]
 
 async def generate_voiceover(text, output_file="voice.mp3"):
     print("Generating Hindi voiceover with Edge-TTS...")
@@ -86,39 +92,42 @@ async def generate_voiceover(text, output_file="voice.mp3"):
     await communicate.save(output_file)
 
 def download_trending_bgm(output_file="trending_bgm.mp3"):
-    print("Searching and downloading trending Hindi BGM from YouTube using yt-dlp...")
-    search_queries = [
-        "ytsearch1:trending hindi bgm instrumental shorts",
-        "ytsearch1:viral hindi background music reels",
-        "ytsearch1:mahabharat dramatic instrumental bgm"
+    print("Downloading royalty-free dramatic instrumental BGM...")
+    # Direct reliable royalty-free dramatic BGM audio links
+    bgm_urls = [
+        "[https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a7322d.mp3](https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a7322d.mp3)",
+        "[https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3](https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3)",
+        "[https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3](https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3)"
     ]
-    query = random.choice(search_queries)
     
-    cmd = [
-        "yt-dlp",
-        "--extract-audio",
-        "--audio-format", "mp3",
-        "-o", output_file,
-        query,
-        "--no-playlist"
-    ]
+    selected_url = random.choice(bgm_urls)
+    headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
-        subprocess.run(cmd, check=True)
-        print("Successfully downloaded trending YouTube BGM.")
-        return True
+        resp = requests.get(selected_url, headers=headers, timeout=30)
+        if resp.status_code == 200:
+            with open(output_file, "wb") as f:
+                f.write(resp.content)
+            print("Successfully downloaded background music.")
+            return True
+        else:
+            print(f"Failed to download BGM, status code: {resp.status_code}")
+            return False
     except Exception as e:
-        print(f"Could not download BGM automatically: {e}")
+        print(f"Could not download BGM: {e}")
         return False
 
 def download_background_video(search_term, output_file="background.mp4"):
-    print(f"Searching Pexels for stock footage: {search_term}...")
+    # Ensure clean, URL-safe search term
+    clean_term = urllib.parse.quote(search_term)
+    print(f"Searching Pexels for stock footage: {search_term} (URL encoded: {clean_term})...")
+    
     headers = {"Authorization": PEXELS_API_KEY}
-    url = f"[https://api.pexels.com/videos/search?query=](https://api.pexels.com/videos/search?query=){search_term}&per_page=5&orientation=portrait"
+    url = f"[https://api.pexels.com/videos/search?query=](https://api.pexels.com/videos/search?query=){clean_term}&per_page=5&orientation=portrait"
     
     resp = requests.get(url, headers=headers)
     if resp.status_code != 200:
-        raise RuntimeError(f"Pexels API failed: {resp.text}")
+        raise RuntimeError(f"Pexels API failed with status {resp.status_code}: {resp.text}")
         
     data = resp.json()
     if not data.get("videos"):
@@ -151,17 +160,21 @@ def create_final_video(video_file="background.mp4", audio_file="voice.mp3", bgm_
         video = concatenate_videoclips([video] * loops)
     video = video.subclip(0, voice.duration)
 
-    # Mix low volume BGM if yt-dlp downloaded it
+    # Mix low volume BGM if downloaded
     if os.path.exists(bgm_file):
-        print("Mixing low-volume trending BGM with Hindi voiceover...")
-        bgm = AudioFileClip(bgm_file)
-        if bgm.duration < voice.duration:
-            loops = int(voice.duration / bgm.duration) + 1
-            bgm = concatenate_audioclips([bgm] * loops)
-        
-        # Set BGM volume to 12% so Hindi narration is clear
-        bgm = bgm.subclip(0, voice.duration).volumex(0.12)
-        final_audio = CompositeAudioClip([voice, bgm])
+        print("Mixing low-volume BGM with Hindi voiceover...")
+        try:
+            bgm = AudioFileClip(bgm_file)
+            if bgm.duration < voice.duration:
+                loops = int(voice.duration / bgm.duration) + 1
+                bgm = concatenate_audioclips([bgm] * loops)
+            
+            # Set BGM volume to 12% so Hindi narration is clear
+            bgm = bgm.subclip(0, voice.duration).volumex(0.12)
+            final_audio = CompositeAudioClip([voice, bgm])
+        except Exception as e:
+            print(f"Error mixing audio ({e}), using voiceover only...")
+            final_audio = voice
     else:
         print("No BGM found, proceeding with Hindi voiceover only...")
         final_audio = voice
@@ -225,7 +238,7 @@ def main():
     # 2. Hindi Voiceover
     asyncio.run(generate_voiceover(script))
 
-    # 3. Download Trending Audio BGM via yt-dlp
+    # 3. Download Background Music
     download_trending_bgm()
 
     # 4. Download Video
