@@ -1,9 +1,7 @@
 google-genai
 requests
-edge-tts
+edge-tts>=7.0.0
 moviepy==1.0.3
 google-api-python-client
 google-auth-oauthlib
 google-auth-httplib2
-yt-dlp
-
