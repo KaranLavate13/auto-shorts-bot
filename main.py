@@ -1,7 +1,6 @@
 import os
 import sys
 import json
-import re
 import random
 import requests
 import urllib.parse
@@ -22,11 +21,12 @@ YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
 YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
-def clean_url(url):
-    """Strips accidental list brackets, quotes, and whitespace from URL strings."""
-    if isinstance(url, list):
-        url = url[0] if url else ""
-    return str(url).strip("[]'\" ")
+def sanitize_to_str(val):
+    """Recursively unwraps lists and strips all stray brackets, quotes, and whitespace."""
+    while isinstance(val, (list, tuple)):
+        val = val[0] if len(val) > 0 else ""
+    s = str(val).strip()
+    return s.strip("[]'\" \t\n\r")
 
 def generate_anime_concept():
     client = genai.Client(api_key=GEMINI_API_KEY)
@@ -34,7 +34,7 @@ def generate_anime_concept():
     prompt = """
     Create metadata and an image prompt for a viral Anime / Cyberpunk YouTube Short.
     
-    Return strictly JSON format with keys:
+    Return strictly valid JSON format with keys:
     - "title": Catchy title with trending hashtags (e.g. #Anime #Cyberpunk #Phonk #Shorts)
     - "description": Short engaging summary with hashtags
     - "image_prompt": Detailed English description for an AI anime art generator (e.g. 'futuristic samurai warrior in neon Tokyo rain, glowing eyes, cyberpunk aesthetic, masterpiece, highly detailed, 8k resolution, cinematic lighting')
@@ -47,18 +47,30 @@ def generate_anime_concept():
     )
     
     text = res.text.strip()
-    if text.startswith("```json"): text = text[7:]
-    if text.startswith("```"): text = text[3:]
-    if text.endswith("```"): text = text[:-3]
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
     
     data = json.loads(text.strip())
-    return str(data["title"]), str(data["description"]), str(data["image_prompt"])
+    
+    title = sanitize_to_str(data.get("title", "Anime Short"))
+    description = sanitize_to_str(data.get("description", "#Anime #Shorts"))
+    image_prompt = sanitize_to_str(data.get("image_prompt", "cyberpunk anime samurai"))
+    
+    return title, description, image_prompt
 
 def download_ai_anime_image(prompt, output_file="anime_art.jpg"):
-    print(f"Generating 9:16 AI Anime art for prompt: '{prompt}'...")
+    clean_p = sanitize_to_str(prompt)
+    print(f"Generating 9:16 AI Anime art for prompt: '{clean_p}'...")
     
-    encoded_prompt = urllib.parse.quote(f"{prompt}, vertical portrait aspect ratio 9:16, masterpiece, highly detailed anime art style")
+    full_prompt = f"{clean_p}, vertical portrait aspect ratio 9:16, masterpiece, highly detailed anime art style"
+    encoded_prompt = urllib.parse.quote(full_prompt)
+    
     image_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}?width=1080&height=1920&nologo=true"
+    image_url = sanitize_to_str(image_url)
     
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     resp = requests.get(image_url, headers=headers, timeout=60)
@@ -78,7 +90,8 @@ def download_phonk_bgm(output_file="phonk_bgm.mp3"):
         "[https://cdn.pixabay.com/download/audio/2023/02/28/audio_b2d2db7e1d.mp3](https://cdn.pixabay.com/download/audio/2023/02/28/audio_b2d2db7e1d.mp3)"
     ]
     
-    selected_url = clean_url(random.choice(phonk_urls))
+    raw_choice = random.choice(phonk_urls)
+    selected_url = sanitize_to_str(raw_choice)
     headers = {"User-Agent": "Mozilla/5.0"}
     
     resp = requests.get(selected_url, headers=headers, timeout=30)
@@ -95,7 +108,6 @@ def create_animated_short(image_file="anime_art.jpg", bgm_file="phonk_bgm.mp3", 
     bgm = AudioFileClip(bgm_file).subclip(0, duration)
     clip = ImageClip(image_file).set_duration(duration)
 
-    # Apply dynamic slow-zoom effect
     animated_clip = clip.resize(lambda t: 1 + 0.03 * t)
     animated_clip = animated_clip.set_position(('center', 'center'))
 
