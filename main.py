@@ -1,146 +1,244 @@
 import os
+import sys
+import json
 import random
-import requests
 import asyncio
+import requests
+import subprocess
 import edge_tts
 from google import genai
-from moviepy.editor import VideoFileClip, AudioFileClip
+from moviepy.editor import (
+    VideoFileClip, 
+    AudioFileClip, 
+    CompositeAudioClip, 
+    concatenate_videoclips, 
+    concatenate_audioclips
+)
+
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# 1. Fetch Environment Variables
-GEMINI_KEY = os.environ["GEMINI_API_KEY"]
-PEXELS_KEY = os.environ["PEXELS_API_KEY"]
-CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
-CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]
-REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
-
-# Topics array - expandable anytime
-TOPICS = ["mindblowing space facts", "interesting psychological facts", "crazy historical facts", "weird nature facts"]
-
-async def generate_speech(text, output_file="voice.mp3"):
-    communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
-    await communicate.save(output_file)
-
-def get_pexels_video(query):
-    headers = {"Authorization": PEXELS_KEY}
-    url = f"https://api.pexels.com/videos/search?query={query}&orientation=portrait&per_page=5"
-    response = requests.get(url, headers=headers).json()
-    
-    videos = response.get("videos", [])
-    if not videos:
-        url = "https://api.pexels.com/videos/search?query=nature&orientation=portrait&per_page=5"
-        videos = requests.get(url, headers=headers).json().get("videos", [])
-        
-    video_url = videos[0]["video_files"][0]["link"]
-    
-    video_data = requests.get(video_url).content
-    with open("background.mp4", "wb") as f:
-        f.write(video_data)
+# Environment Secrets
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
+YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
+YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
+YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
 def generate_content():
-    client = genai.Client(api_key=GEMINI_KEY)
-    topic = random.choice(TOPICS)
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    
+    topics = [
+        "Lord Krishna's Life Lessons and Mahabharat Wisdom", 
+        "The Loyalty and Sacrifice of Karna in Mahabharat", 
+        "Bheeshma Pitamah's Vow and Duty", 
+        "The Bravery of Abhimanyu in the Chakravyuha", 
+        "Yudhishthira's Powerful Lessons on Dharma",
+        "Draupadi's Courage and Divine Faith",
+        "The Laws of Karma from the Mahabharat Epic"
+    ]
+    chosen_topic = random.choice(topics)
     
     prompt = f"""
-    Create a catchy, engaging 30-second script about {topic} for a YouTube Short.
-    Provide output in this EXACT format:
-    TITLE: [Insert title here with hashtags]
-    DESCRIPTION: [Insert brief description]
-    SEARCH: [One word search query for background video, e.g. galaxy, ocean, history]
-    SCRIPT: [The narration spoken text only]
+    Create a 30-to-40 second viral YouTube Short about '{chosen_topic}'.
+    Narrate a short story, quote, or life lesson from the Mahabharat.
+    
+    Return strictly valid JSON format with keys:
+    - "title": catchy title in Hindi/Hinglish with hashtags (e.g. #Mahabharat #Krishna #Spiritual #Shorts)
+    - "description": summary in Hindi with relevant hashtags
+    - "search_term": 1 or 2 word ENGLISH search term for Pexels background video matching the scene (e.g. 'warrior', 'temple', 'chariot', 'sunset', 'fire')
+    - "script": captivating storytelling voiceover text written STRICTLY IN DEVANAGARI HINDI (हिंदी script) (approx 50-65 words). Ensure natural Hindi grammar.
+    
+    Do not add markdown formatting or extra text outside JSON.
     """
-    
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=prompt
-    )
-    
-    text = response.text
-    lines = text.split("\n")
-    
-    title = "Interesting Fact #Shorts"
-    description = "Automated Short"
-    search_term = "space"
-    script = ""
-    
-    for line in lines:
-        if line.startswith("TITLE:"):
-            title = line.replace("TITLE:", "").strip()
-        elif line.startswith("DESCRIPTION:"):
-            description = line.replace("DESCRIPTION:", "").strip()
-        elif line.startswith("SEARCH:"):
-            search_term = line.replace("SEARCH:", "").strip()
-        elif line.startswith("SCRIPT:"):
-            script = line.replace("SCRIPT:", "").strip()
-            
-    if not script:
-        script = text
-        
-    return title, description, search_term, script
 
-def build_video():
-    audio = AudioFileClip("voice.mp3")
-    video = VideoFileClip("background.mp4")
+    print("Generating script using gemini-3.6-flash...")
+    try:
+        res = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt
+        )
+    except Exception as e:
+        raise RuntimeError(f"gemini-3.6-flash model failed: {e}")
+
+    if not res or not res.text:
+        raise RuntimeError("gemini-3.6-flash returned an empty response.")
+
+    response_text = res.text
+
+    # Clean JSON response if wrapped in markdown fences
+    cleaned = response_text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
     
-    # Loop video if audio is longer than background video
-    if video.duration < audio.duration:
-        video = video.loop(duration=audio.duration)
+    data = json.loads(cleaned.strip())
+    return data["title"], data["description"], data["search_term"], data["script"]
+
+async def generate_voiceover(text, output_file="voice.mp3"):
+    print("Generating Hindi voiceover with Edge-TTS...")
+    # Indian Hindi Male Narrator Voice
+    communicate = edge_tts.Communicate(text, "hi-IN-MadhurNeural")
+    await communicate.save(output_file)
+
+def download_trending_bgm(output_file="trending_bgm.mp3"):
+    print("Searching and downloading trending Hindi BGM from YouTube using yt-dlp...")
+    search_queries = [
+        "ytsearch1:trending hindi bgm instrumental shorts",
+        "ytsearch1:viral hindi background music reels",
+        "ytsearch1:mahabharat dramatic instrumental bgm"
+    ]
+    query = random.choice(search_queries)
+    
+    cmd = [
+        "yt-dlp",
+        "--extract-audio",
+        "--audio-format", "mp3",
+        "-o", output_file,
+        query,
+        "--no-playlist"
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True)
+        print("Successfully downloaded trending YouTube BGM.")
+        return True
+    except Exception as e:
+        print(f"Could not download BGM automatically: {e}")
+        return False
+
+def download_background_video(search_term, output_file="background.mp4"):
+    print(f"Searching Pexels for stock footage: {search_term}...")
+    headers = {"Authorization": PEXELS_API_KEY}
+    url = f"[https://api.pexels.com/videos/search?query=](https://api.pexels.com/videos/search?query=){search_term}&per_page=5&orientation=portrait"
+    
+    resp = requests.get(url, headers=headers)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Pexels API failed: {resp.text}")
+        
+    data = resp.json()
+    if not data.get("videos"):
+        print(f"No vertical videos found for '{search_term}'. Falling back to 'temple'...")
+        url = "[https://api.pexels.com/videos/search?query=temple&per_page=5&orientation=portrait](https://api.pexels.com/videos/search?query=temple&per_page=5&orientation=portrait)"
+        data = requests.get(url, headers=headers).json()
+
+    video = random.choice(data["videos"])
+    video_files = video["video_files"]
+    download_url = video_files[0]["link"]
+    
+    for vf in video_files:
+        if vf.get("width") and vf.get("height") and vf["height"] > vf["width"]:
+            download_url = vf["link"]
+            break
+
+    print("Downloading stock video footage...")
+    v_resp = requests.get(download_url)
+    with open(output_file, "wb") as f:
+        f.write(v_resp.content)
+
+def create_final_video(video_file="background.mp4", audio_file="voice.mp3", bgm_file="trending_bgm.mp3", output_file="final_short.mp4"):
+    print("Editing video with MoviePy...")
+    voice = AudioFileClip(audio_file)
+    video = VideoFileClip(video_file)
+
+    # Trim/loop video to match Hindi voice length
+    if video.duration < voice.duration:
+        loops = int(voice.duration / video.duration) + 1
+        video = concatenate_videoclips([video] * loops)
+    video = video.subclip(0, voice.duration)
+
+    # Mix low volume BGM if yt-dlp downloaded it
+    if os.path.exists(bgm_file):
+        print("Mixing low-volume trending BGM with Hindi voiceover...")
+        bgm = AudioFileClip(bgm_file)
+        if bgm.duration < voice.duration:
+            loops = int(voice.duration / bgm.duration) + 1
+            bgm = concatenate_audioclips([bgm] * loops)
+        
+        # Set BGM volume to 12% so Hindi narration is clear
+        bgm = bgm.subclip(0, voice.duration).volumex(0.12)
+        final_audio = CompositeAudioClip([voice, bgm])
     else:
-        video = video.subclip(0, audio.duration)
-        
-    final_video = video.set_audio(audio)
-    final_video.write_videofile("final_short.mp4", fps=30, codec="libx264", audio_codec="aac")
+        print("No BGM found, proceeding with Hindi voiceover only...")
+        final_audio = voice
 
-def upload_to_youtube(title, description):
-    creds = Credentials(
-        None,
-        refresh_token=REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=CLIENT_ID,
-        client_secret=CLIENT_SECRET
+    final_video = video.set_audio(final_audio)
+    
+    final_video.write_videofile(
+        output_file, 
+        codec="libx264", 
+        audio_codec="aac", 
+        fps=24,
+        logger=None
     )
-    
+    print("Final video created successfully.")
+
+def upload_to_youtube(video_file="final_short.mp4", title="Shorts", description=""):
+    print("Authenticating with YouTube API...")
+    creds = Credentials(
+        token=None,
+        refresh_token=YOUTUBE_REFRESH_TOKEN,
+        token_uri="[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)",
+        client_id=YOUTUBE_CLIENT_ID,
+        client_secret=YOUTUBE_CLIENT_SECRET
+    )
+
     youtube = build("youtube", "v3", credentials=creds)
-    
+
     body = {
         "snippet": {
-            "title": title[:100],
+            "title": title[:95],
             "description": description,
-            "categoryId": "27"
+            "tags": ["Mahabharat", "HindiFacts", "Spiritual", "Shorts"],
+            "categoryId": "22"
         },
         "status": {
             "privacyStatus": "public",
             "selfDeclaredMadeForKids": False
         }
     }
+
+    media = MediaFileUpload(video_file, chunksize=-1, resumable=True)
+
+    print("Uploading video to YouTube...")
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body=body,
+        media_body=media
+    )
+    response = request.execute()
+    print(f"Upload Complete! Video ID: {response.get('id')}")
+
+def main():
+    print("--- STARTING HINDI AUTOMATED SHORTS PIPELINE ---")
     
-    media = MediaFileUpload("final_short.mp4", chunksize=-1, resumable=True)
-    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-    
-    response = None
-    while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"Uploaded {int(status.progress() * 100)}%")
-            
-    print(f"Video uploaded successfully! Video ID: {response['id']}")
+    # 1. Content Generation in Hindi using gemini-3.6-flash
+    title, description, search_term, script = generate_content()
+    print(f"Title: {title}")
+    print(f"Pexels Search Term: {search_term}")
+    print(f"Hindi Script: {script}\n")
+
+    # 2. Hindi Voiceover
+    asyncio.run(generate_voiceover(script))
+
+    # 3. Download Trending Audio BGM via yt-dlp
+    download_trending_bgm()
+
+    # 4. Download Video
+    download_background_video(search_term)
+
+    # 5. Render Video
+    create_final_video()
+
+    # 6. YouTube Upload
+    upload_to_youtube(title=title, description=description)
+
+    print("--- PIPELINE FINISHED SUCCESSFULLY ---")
 
 if __name__ == "__main__":
-    print("Generating video script...")
-    title, description, search_term, script = generate_content()
+    main()
     
-    print("Generating voiceover...")
-    asyncio.run(generate_speech(script))
-    
-    print("Downloading background video...")
-    get_pexels_video(search_term)
-    
-    print("Stitching video and audio together...")
-    build_video()
-    
-    print("Uploading to YouTube...")
-    upload_to_youtube(title, description)
-    print("Done!")
-  
