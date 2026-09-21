@@ -12,7 +12,6 @@ from moviepy.editor import (
 )
 
 from google import genai
-from google.genai import types
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -45,7 +44,6 @@ def generate_anime_concept():
     res = None
     max_retries = 5
     
-    # Retry loop specifically for gemini-3.6-flash to handle temporary 503 high-demand spikes
     for attempt in range(1, max_retries + 1):
         try:
             print(f"Generating anime concept using gemini-3.6-flash (Attempt {attempt}/{max_retries})...")
@@ -90,7 +88,7 @@ def download_ai_anime_image(prompt, output_file="anime_art.jpg"):
     image_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}?width=1080&height=1920&nologo=true"
     image_url = sanitize_to_str(image_url)
     
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     resp = requests.get(image_url, headers=headers, timeout=60)
     
     if resp.status_code == 200:
@@ -103,22 +101,34 @@ def download_ai_anime_image(prompt, output_file="anime_art.jpg"):
 def download_phonk_bgm(output_file="phonk_bgm.mp3"):
     print("Downloading royalty-free Phonk track...")
     phonk_urls = [
-        "[https://cdn.pixabay.com/download/audio/2023/04/12/audio_13b0c51cf9.mp3](https://cdn.pixabay.com/download/audio/2023/04/12/audio_13b0c51cf9.mp3)",
-        "[https://cdn.pixabay.com/download/audio/2022/11/06/audio_c1e2e13a44.mp3](https://cdn.pixabay.com/download/audio/2022/11/06/audio_c1e2e13a44.mp3)",
-        "[https://cdn.pixabay.com/download/audio/2023/02/28/audio_b2d2db7e1d.mp3](https://cdn.pixabay.com/download/audio/2023/02/28/audio_b2d2db7e1d.mp3)"
+        "[https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c4/Cyberpunk_Moonlight.ogg/Cyberpunk_Moonlight.ogg.mp3](https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c4/Cyberpunk_Moonlight.ogg/Cyberpunk_Moonlight.ogg.mp3)",
+        "[https://ia801504.us.archive.org/33/items/cyberpunk-audio-sample/cyberpunk.mp3](https://ia801504.us.archive.org/33/items/cyberpunk-audio-sample/cyberpunk.mp3)",
+        "[https://cdn.pixabay.com/download/audio/2023/04/12/audio_13b0c51cf9.mp3?filename=phonk-13b0c51cf9.mp3](https://cdn.pixabay.com/download/audio/2023/04/12/audio_13b0c51cf9.mp3?filename=phonk-13b0c51cf9.mp3)"
     ]
     
-    raw_choice = random.choice(phonk_urls)
-    selected_url = sanitize_to_str(raw_choice)
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "[https://pixabay.com/](https://pixabay.com/)"
+    }
     
-    resp = requests.get(selected_url, headers=headers, timeout=30)
-    if resp.status_code == 200:
-        with open(output_file, "wb") as f:
-            f.write(resp.content)
-        print("Phonk BGM downloaded successfully.")
-    else:
-        raise RuntimeError(f"Failed to download BGM, status code: {resp.status_code}")
+    success = False
+    for raw_url in phonk_urls:
+        selected_url = sanitize_to_str(raw_url)
+        try:
+            print(f"Trying audio source: {selected_url[:40]}...")
+            resp = requests.get(selected_url, headers=headers, timeout=30)
+            if resp.status_code == 200 and len(resp.content) > 10000:
+                with open(output_file, "wb") as f:
+                    f.write(resp.content)
+                print("Phonk BGM downloaded successfully.")
+                success = True
+                break
+        except Exception as e:
+            print(f"Source failed: {e}")
+            continue
+            
+    if not success:
+        raise RuntimeError("Failed to download BGM from all available sources due to CDN restrictions.")
 
 def create_animated_short(image_file="anime_art.jpg", bgm_file="phonk_bgm.mp3", output_file="final_short.mp4", duration=15):
     print("Converting 9:16 image to motion video with dynamic zoom...")
