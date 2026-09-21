@@ -31,18 +31,7 @@ def sanitize_to_str(val):
     return s.strip("[]'\" \t\n\r")
 
 def generate_anime_concept():
-    # Configure retry options to gracefully handle 503 Server Errors
-    retry_config = types.HttpOptions(
-        retry_options=types.HttpRetryOptions(
-            attempts=5,
-            initial_delay=2.0,
-            max_delay=30.0,
-            http_status_codes=[408, 429, 500, 502, 503, 504]
-        ),
-        timeout=60000
-    )
-    
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=retry_config)
+    client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = """
     Create metadata and an image prompt for a viral Anime / Cyberpunk YouTube Short.
@@ -53,24 +42,27 @@ def generate_anime_concept():
     - "image_prompt": Detailed English description for an AI anime art generator (e.g. 'futuristic samurai warrior in neon Tokyo rain, glowing eyes, cyberpunk aesthetic, masterpiece, highly detailed, 8k resolution, cinematic lighting')
     """
 
-    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
     res = None
-
-    for model_name in models_to_try:
+    max_retries = 5
+    
+    # Retry loop specifically for gemini-3.6-flash to handle temporary 503 high-demand spikes
+    for attempt in range(1, max_retries + 1):
         try:
-            print(f"Generating anime concept using {model_name}...")
+            print(f"Generating anime concept using gemini-3.6-flash (Attempt {attempt}/{max_retries})...")
             res = client.models.generate_content(
-                model=model_name,
+                model="gemini-3.6-flash",
                 contents=prompt
             )
             if res and res.text:
                 break
         except Exception as e:
-            print(f"Warning: {model_name} failed with error: {e}. Trying fallback model...")
-            time.sleep(3)
-
-    if not res or not res.text:
-        raise RuntimeError("Failed to generate content from Gemini API across all attempted models.")
+            print(f"Warning: Attempt {attempt} failed with error: {e}")
+            if attempt < max_retries:
+                wait_time = attempt * 5
+                print(f"Waiting {wait_time} seconds before retrying...")
+                time.sleep(wait_time)
+            else:
+                raise RuntimeError(f"Failed to generate content after {max_retries} attempts.")
 
     text = res.text.strip()
     if text.startswith("```json"):
