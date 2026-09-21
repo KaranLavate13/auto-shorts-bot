@@ -2,8 +2,9 @@ name: Daily YouTube Shorts Generator
 
 on:
   schedule:
-    - cron: '0 12 * * *'  # Runs automatically every day at 12:00 PM UTC
-  workflow_dispatch:        # Allows manual run anytime
+    # 13:00 UTC = 6:30 PM IST
+    - cron: '0 13 * * *'
+  workflow_dispatch:
 
 jobs:
   build-and-upload:
@@ -35,5 +36,6 @@ jobs:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-        run: python main.py
-        
+        run: |
+          python main.py
+          
