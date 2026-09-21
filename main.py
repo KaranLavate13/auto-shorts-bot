@@ -1,178 +1,146 @@
 import os
-import sys
-import json
-import time
+import random
 import requests
-import urllib.parse
-from gtts import gTTS
-from moviepy.editor import ImageClip, AudioFileClip
-
+import asyncio
+import edge_tts
 from google import genai
+from moviepy.editor import VideoFileClip, AudioFileClip
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# Environment Secrets
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
-YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
-YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
+# 1. Fetch Environment Variables
+GEMINI_KEY = os.environ["GEMINI_API_KEY"]
+PEXELS_KEY = os.environ["PEXELS_API_KEY"]
+CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
+CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]
+REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
 
-def sanitize_to_str(val):
-    """Recursively unwraps lists and strips all stray brackets, quotes, and whitespace."""
-    while isinstance(val, (list, tuple)):
-        val = val[0] if len(val) > 0 else ""
-    s = str(val).strip()
-    return s.strip("[]'\" \t\n\r")
+# Topics array - expandable anytime
+TOPICS = ["mindblowing space facts", "interesting psychological facts", "crazy historical facts", "weird nature facts"]
 
-def generate_anime_concept():
-    client = genai.Client(api_key=GEMINI_API_KEY)
+async def generate_speech(text, output_file="voice.mp3"):
+    communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
+    await communicate.save(output_file)
+
+def get_pexels_video(query):
+    headers = {"Authorization": PEXELS_KEY}
+    url = f"https://api.pexels.com/videos/search?query={query}&orientation=portrait&per_page=5"
+    response = requests.get(url, headers=headers).json()
     
-    prompt = """
-    Create metadata and an image prompt for a viral Anime / Cyberpunk YouTube Short.
+    videos = response.get("videos", [])
+    if not videos:
+        url = "https://api.pexels.com/videos/search?query=nature&orientation=portrait&per_page=5"
+        videos = requests.get(url, headers=headers).json().get("videos", [])
+        
+    video_url = videos[0]["video_files"][0]["link"]
     
-    Return strictly valid JSON format with keys:
-    - "title": Catchy title with trending hashtags (e.g. #Anime #Cyberpunk #Shorts)
-    - "description": Short engaging summary with hashtags
-    - "hook": A short, punchy 1-sentence voiceover script to speak in the video (e.g. 'Entering the neon underworld where legends are forged.')
-    - "image_prompt": Detailed English description for an AI anime art generator (e.g. 'futuristic samurai warrior in neon Tokyo rain, glowing eyes, cyberpunk aesthetic, masterpiece, highly detailed, 8k resolution, cinematic lighting')
+    video_data = requests.get(video_url).content
+    with open("background.mp4", "wb") as f:
+        f.write(video_data)
+
+def generate_content():
+    client = genai.Client(api_key=GEMINI_KEY)
+    topic = random.choice(TOPICS)
+    
+    prompt = f"""
+    Create a catchy, engaging 30-second script about {topic} for a YouTube Short.
+    Provide output in this EXACT format:
+    TITLE: [Insert title here with hashtags]
+    DESCRIPTION: [Insert brief description]
+    SEARCH: [One word search query for background video, e.g. galaxy, ocean, history]
+    SCRIPT: [The narration spoken text only]
     """
+    
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
+    
+    text = response.text
+    lines = text.split("\n")
+    
+    title = "Interesting Fact #Shorts"
+    description = "Automated Short"
+    search_term = "space"
+    script = ""
+    
+    for line in lines:
+        if line.startswith("TITLE:"):
+            title = line.replace("TITLE:", "").strip()
+        elif line.startswith("DESCRIPTION:"):
+            description = line.replace("DESCRIPTION:", "").strip()
+        elif line.startswith("SEARCH:"):
+            search_term = line.replace("SEARCH:", "").strip()
+        elif line.startswith("SCRIPT:"):
+            script = line.replace("SCRIPT:", "").strip()
+            
+    if not script:
+        script = text
+        
+    return title, description, search_term, script
 
-    res = None
-    max_retries = 5
+def build_video():
+    audio = AudioFileClip("voice.mp3")
+    video = VideoFileClip("background.mp4")
     
-    for attempt in range(1, max_retries + 1):
-        try:
-            print(f"Generating anime concept using gemini-3.6-flash (Attempt {attempt}/{max_retries})...")
-            res = client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt
-            )
-            if res and res.text:
-                break
-        except Exception as e:
-            print(f"Warning: Attempt {attempt} failed with error: {e}")
-            if attempt < max_retries:
-                wait_time = attempt * 5
-                print(f"Waiting {wait_time} seconds before retrying...")
-                time.sleep(wait_time)
-            else:
-                raise RuntimeError(f"Failed to generate content after {max_retries} attempts.")
-
-    text = res.text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    
-    data = json.loads(text.strip())
-    
-    title = sanitize_to_str(data.get("title", "Anime Short"))
-    description = sanitize_to_str(data.get("description", "#Anime #Shorts"))
-    hook = sanitize_to_str(data.get("hook", "Entering the neon underworld."))
-    image_prompt = sanitize_to_str(data.get("image_prompt", "cyberpunk anime samurai"))
-    
-    return title, description, hook, image_prompt
-
-def download_ai_anime_image(prompt, output_file="anime_art.jpg"):
-    clean_p = sanitize_to_str(prompt)
-    print(f"Generating 9:16 AI Anime art for prompt: '{clean_p}'...")
-    
-    full_prompt = f"{clean_p}, vertical portrait aspect ratio 9:16, masterpiece, highly detailed anime art style"
-    encoded_prompt = urllib.parse.quote(full_prompt)
-    
-    image_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}?width=1080&height=1920&nologo=true"
-    image_url = sanitize_to_str(image_url)
-    
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    resp = requests.get(image_url, headers=headers, timeout=60)
-    
-    if resp.status_code == 200:
-        with open(output_file, "wb") as f:
-            f.write(resp.content)
-        print("9:16 AI image downloaded successfully.")
+    # Loop video if audio is longer than background video
+    if video.duration < audio.duration:
+        video = video.loop(duration=audio.duration)
     else:
-        raise RuntimeError(f"Failed to generate AI image. HTTP Status: {resp.status_code}")
+        video = video.subclip(0, audio.duration)
+        
+    final_video = video.set_audio(audio)
+    final_video.write_videofile("final_short.mp4", fps=30, codec="libx264", audio_codec="aac")
 
-def generate_voiceover(text, output_file="voiceover.mp3"):
-    print(f"Generating local AI voiceover for text: '{text}'...")
-    tts = gTTS(text=text, lang='en', slow=False)
-    tts.save(output_file)
-    print("Voiceover generated successfully.")
-
-def create_animated_short(image_file="anime_art.jpg", voice_file="voiceover.mp3", output_file="final_short.mp4", duration=15):
-    print("Converting 9:16 image to motion video with voiceover audio...")
-    
-    clip = ImageClip(image_file).set_duration(duration)
-    animated_clip = clip.resize(lambda t: 1 + 0.03 * t)
-    animated_clip = animated_clip.set_position(('center', 'center'))
-
-    # Attach generated voiceover audio
-    audio = AudioFileClip(voice_file).subclip(0, duration)
-    final_video = animated_clip.set_audio(audio)
-
-    final_video.write_videofile(
-        output_file, 
-        codec="libx264", 
-        audio_codec="aac", 
-        fps=30,
-        logger=None
-    )
-    print("Video rendered successfully with voiceover.")
-
-def upload_to_youtube(video_file="final_short.mp4", title="Anime Short", description=""):
-    print("Authenticating with YouTube API...")
+def upload_to_youtube(title, description):
     creds = Credentials(
-        token=None,
-        refresh_token=YOUTUBE_REFRESH_TOKEN,
-        token_uri="[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)",
-        client_id=YOUTUBE_CLIENT_ID,
-        client_secret=YOUTUBE_CLIENT_SECRET
+        None,
+        refresh_token=REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET
     )
-
+    
     youtube = build("youtube", "v3", credentials=creds)
-
+    
     body = {
         "snippet": {
-            "title": title[:95],
+            "title": title[:100],
             "description": description,
-            "tags": ["AnimeEdits", "Cyberpunk", "AIArt", "Shorts"],
-            "categoryId": "1"
+            "categoryId": "27"
         },
         "status": {
             "privacyStatus": "public",
             "selfDeclaredMadeForKids": False
         }
     }
-
-    media = MediaFileUpload(video_file, chunksize=-1, resumable=True)
-
-    print("Uploading video to YouTube...")
-    request = youtube.videos().insert(
-        part="snippet,status",
-        body=body,
-        media_body=media
-    )
-    response = request.execute()
-    print(f"Upload Complete! Video ID: {response.get('id')}")
-
-def main():
-    print("--- STARTING 100% FREE VOICE-OVER AI ANIME PIPELINE ---")
     
-    title, description, hook, image_prompt = generate_anime_concept()
-    print(f"Title: {title}")
-    print(f"Voice Hook: {hook}")
-    print(f"AI Prompt: {image_prompt}\n")
-
-    download_ai_anime_image(image_prompt)
-    generate_voiceover(hook)
-    create_animated_short()
-    upload_to_youtube(title=title, description=description)
-
-    print("--- PIPELINE FINISHED SUCCESSFULLY ---")
+    media = MediaFileUpload("final_short.mp4", chunksize=-1, resumable=True)
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+    
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"Uploaded {int(status.progress() * 100)}%")
+            
+    print(f"Video uploaded successfully! Video ID: {response['id']}")
 
 if __name__ == "__main__":
-    main()
+    print("Generating video script...")
+    title, description, search_term, script = generate_content()
+    
+    print("Generating voiceover...")
+    asyncio.run(generate_speech(script))
+    
+    print("Downloading background video...")
+    get_pexels_video(search_term)
+    
+    print("Stitching video and audio together...")
+    build_video()
+    
+    print("Uploading to YouTube...")
+    upload_to_youtube(title, description)
+    print("Done!")
     
