@@ -81,10 +81,10 @@ def generate_content():
     # Clean search_term string to avoid list/bracket issues
     search_term = data.get("search_term", "temple")
     if isinstance(search_term, list):
-        search_term = " ".join(search_term)
+        search_term = search_term[0] if len(search_term) > 0 else "temple"
     search_term = str(search_term).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
     
-    return data["title"], data["description"], search_term, data["script"]
+    return str(data["title"]), str(data["description"]), str(search_term), str(data["script"])
 
 async def generate_voiceover(text, output_file="voice.mp3"):
     print("Generating Hindi voiceover with Edge-TTS...")
@@ -117,7 +117,7 @@ def download_trending_bgm(output_file="trending_bgm.mp3"):
         "[https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3](https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3)"
     ]
     
-    selected_url = random.choice(bgm_urls)
+    selected_url = str(random.choice(bgm_urls)).strip()
     headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
@@ -135,29 +135,32 @@ def download_trending_bgm(output_file="trending_bgm.mp3"):
         return False
 
 def download_background_video(search_term, output_file="background.mp4"):
-    clean_term = urllib.parse.quote(search_term)
+    if not PEXELS_API_KEY:
+        raise ValueError("PEXELS_API_KEY environment variable is missing or empty!")
+
+    clean_term = urllib.parse.quote(str(search_term).strip())
     print(f"Searching Pexels for stock footage: {search_term} (URL encoded: {clean_term})...")
     
-    headers = {"Authorization": PEXELS_API_KEY}
-    url = f"[https://api.pexels.com/videos/search?query=](https://api.pexels.com/videos/search?query=){clean_term}&per_page=5&orientation=portrait"
+    headers = {"Authorization": PEXELS_API_KEY.strip()}
+    api_url = f"[https://api.pexels.com/videos/search?query=](https://api.pexels.com/videos/search?query=){clean_term}&per_page=5&orientation=portrait"
     
-    resp = requests.get(url, headers=headers)
+    resp = requests.get(str(api_url), headers=headers)
     if resp.status_code != 200:
         raise RuntimeError(f"Pexels API failed with status {resp.status_code}: {resp.text}")
         
     data = resp.json()
     if not data.get("videos"):
         print(f"No vertical videos found for '{search_term}'. Falling back to 'temple'...")
-        url = "[https://api.pexels.com/videos/search?query=temple&per_page=5&orientation=portrait](https://api.pexels.com/videos/search?query=temple&per_page=5&orientation=portrait)"
-        data = requests.get(url, headers=headers).json()
+        fallback_url = "[https://api.pexels.com/videos/search?query=temple&per_page=5&orientation=portrait](https://api.pexels.com/videos/search?query=temple&per_page=5&orientation=portrait)"
+        data = requests.get(str(fallback_url), headers=headers).json()
 
     video = random.choice(data["videos"])
     video_files = video["video_files"]
-    download_url = video_files[0]["link"]
+    download_url = str(video_files[0]["link"])
     
     for vf in video_files:
         if vf.get("width") and vf.get("height") and vf["height"] > vf["width"]:
-            download_url = vf["link"]
+            download_url = str(vf["link"])
             break
 
     print("Downloading stock video footage...")
