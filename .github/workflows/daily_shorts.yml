@@ -1,36 +1,17 @@
-name: YouTube Shorts Daily Uploader
-
-on:
-  schedule:
-    # Runs at 10:30 AM IST (05:00 UTC)
-    - cron: '0 5 * * *'
-    # Runs at 6:30 PM IST (13:00 UTC)
-    - cron: '0 13 * * *'
-  workflow_dispatch: # Allows you to trigger it manually for testing
-
-jobs:
-  generate_and_upload:
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v3
-
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
+    # --- ADD THIS NEW BLOCK ---
+    - name: Install System Dependencies (ImageMagick)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y imagemagick ghostscript
+        # Ubuntu's default ImageMagick security policy blocks text rendering. This removes that restriction:
+        sudo sed -i '/<policy domain="path" rights="none" pattern="@\*"/d' /etc/ImageMagick-6/policy.xml
+    # --------------------------
+
     - name: Install Dependencies
       run: pip install -r requirements.txt
-
-    - name: Create Google Credentials File
-      env:
-        # You must add your token.json contents to GitHub Secrets as GCP_TOKEN_JSON
-        GCP_TOKEN_JSON: ${{ secrets.GCP_TOKEN_JSON }}
-      run: |
-        echo "$GCP_TOKEN_JSON" > token.json
-
-    - name: Run Video Generator and Uploader
-      run: python main.py
       
