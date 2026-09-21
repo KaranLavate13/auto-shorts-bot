@@ -23,12 +23,10 @@ YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
 def clean_url(url):
-    """Sanitizes strings to ensure valid HTTP URL formatting."""
+    """Strips accidental list brackets, quotes, and whitespace from URL strings."""
     if isinstance(url, list):
         url = url[0] if url else ""
-    url = str(url).strip()
-    url = re.sub(r"^[\[\'\"]+", "", url)     url = re.sub(r"[\]\'\"]+$", "", url)
-    return url.strip()
+    return str(url).strip("[]'\" ")
 
 def generate_anime_concept():
     client = genai.Client(api_key=GEMINI_API_KEY)
@@ -97,7 +95,7 @@ def create_animated_short(image_file="anime_art.jpg", bgm_file="phonk_bgm.mp3", 
     bgm = AudioFileClip(bgm_file).subclip(0, duration)
     clip = ImageClip(image_file).set_duration(duration)
 
-    # Apply dynamic 3% per second slow-zoom effect
+    # Apply dynamic slow-zoom effect
     animated_clip = clip.resize(lambda t: 1 + 0.03 * t)
     animated_clip = animated_clip.set_position(('center', 'center'))
 
