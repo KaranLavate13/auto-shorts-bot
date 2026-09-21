@@ -1,15 +1,11 @@
 import os
 import sys
 import json
-import random
 import time
 import requests
 import urllib.parse
-from moviepy.editor import (
-    ImageClip, 
-    AudioFileClip, 
-    CompositeAudioClip
-)
+from gtts import gTTS
+from moviepy.editor import ImageClip, AudioFileClip
 
 from google import genai
 from google.oauth2.credentials import Credentials
@@ -36,8 +32,9 @@ def generate_anime_concept():
     Create metadata and an image prompt for a viral Anime / Cyberpunk YouTube Short.
     
     Return strictly valid JSON format with keys:
-    - "title": Catchy title with trending hashtags (e.g. #Anime #Cyberpunk #Phonk #Shorts)
+    - "title": Catchy title with trending hashtags (e.g. #Anime #Cyberpunk #Shorts)
     - "description": Short engaging summary with hashtags
+    - "hook": A short, punchy 1-sentence voiceover script to speak in the video (e.g. 'Entering the neon underworld where legends are forged.')
     - "image_prompt": Detailed English description for an AI anime art generator (e.g. 'futuristic samurai warrior in neon Tokyo rain, glowing eyes, cyberpunk aesthetic, masterpiece, highly detailed, 8k resolution, cinematic lighting')
     """
 
@@ -74,9 +71,10 @@ def generate_anime_concept():
     
     title = sanitize_to_str(data.get("title", "Anime Short"))
     description = sanitize_to_str(data.get("description", "#Anime #Shorts"))
+    hook = sanitize_to_str(data.get("hook", "Entering the neon underworld."))
     image_prompt = sanitize_to_str(data.get("image_prompt", "cyberpunk anime samurai"))
     
-    return title, description, image_prompt
+    return title, description, hook, image_prompt
 
 def download_ai_anime_image(prompt, output_file="anime_art.jpg"):
     clean_p = sanitize_to_str(prompt)
@@ -98,48 +96,23 @@ def download_ai_anime_image(prompt, output_file="anime_art.jpg"):
     else:
         raise RuntimeError(f"Failed to generate AI image. HTTP Status: {resp.status_code}")
 
-def download_phonk_bgm(output_file="phonk_bgm.mp3"):
-    print("Downloading royalty-free Phonk track...")
-    phonk_urls = [
-        "[https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c4/Cyberpunk_Moonlight.ogg/Cyberpunk_Moonlight.ogg.mp3](https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c4/Cyberpunk_Moonlight.ogg/Cyberpunk_Moonlight.ogg.mp3)",
-        "[https://ia801504.us.archive.org/33/items/cyberpunk-audio-sample/cyberpunk.mp3](https://ia801504.us.archive.org/33/items/cyberpunk-audio-sample/cyberpunk.mp3)",
-        "[https://cdn.pixabay.com/download/audio/2023/04/12/audio_13b0c51cf9.mp3?filename=phonk-13b0c51cf9.mp3](https://cdn.pixabay.com/download/audio/2023/04/12/audio_13b0c51cf9.mp3?filename=phonk-13b0c51cf9.mp3)"
-    ]
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "[https://pixabay.com/](https://pixabay.com/)"
-    }
-    
-    success = False
-    for raw_url in phonk_urls:
-        selected_url = sanitize_to_str(raw_url)
-        try:
-            print(f"Trying audio source: {selected_url[:40]}...")
-            resp = requests.get(selected_url, headers=headers, timeout=30)
-            if resp.status_code == 200 and len(resp.content) > 10000:
-                with open(output_file, "wb") as f:
-                    f.write(resp.content)
-                print("Phonk BGM downloaded successfully.")
-                success = True
-                break
-        except Exception as e:
-            print(f"Source failed: {e}")
-            continue
-            
-    if not success:
-        raise RuntimeError("Failed to download BGM from all available sources due to CDN restrictions.")
+def generate_voiceover(text, output_file="voiceover.mp3"):
+    print(f"Generating local AI voiceover for text: '{text}'...")
+    tts = gTTS(text=text, lang='en', slow=False)
+    tts.save(output_file)
+    print("Voiceover generated successfully.")
 
-def create_animated_short(image_file="anime_art.jpg", bgm_file="phonk_bgm.mp3", output_file="final_short.mp4", duration=15):
-    print("Converting 9:16 image to motion video with dynamic zoom...")
+def create_animated_short(image_file="anime_art.jpg", voice_file="voiceover.mp3", output_file="final_short.mp4", duration=15):
+    print("Converting 9:16 image to motion video with voiceover audio...")
     
-    bgm = AudioFileClip(bgm_file).subclip(0, duration)
     clip = ImageClip(image_file).set_duration(duration)
-
     animated_clip = clip.resize(lambda t: 1 + 0.03 * t)
     animated_clip = animated_clip.set_position(('center', 'center'))
 
-    final_video = animated_clip.set_audio(bgm)
+    # Attach generated voiceover audio
+    audio = AudioFileClip(voice_file).subclip(0, duration)
+    final_video = animated_clip.set_audio(audio)
+
     final_video.write_videofile(
         output_file, 
         codec="libx264", 
@@ -147,7 +120,7 @@ def create_animated_short(image_file="anime_art.jpg", bgm_file="phonk_bgm.mp3", 
         fps=30,
         logger=None
     )
-    print("Video rendered successfully.")
+    print("Video rendered successfully with voiceover.")
 
 def upload_to_youtube(video_file="final_short.mp4", title="Anime Short", description=""):
     print("Authenticating with YouTube API...")
@@ -165,7 +138,7 @@ def upload_to_youtube(video_file="final_short.mp4", title="Anime Short", descrip
         "snippet": {
             "title": title[:95],
             "description": description,
-            "tags": ["AnimeEdits", "Phonk", "Cyberpunk", "AIArt", "Shorts"],
+            "tags": ["AnimeEdits", "Cyberpunk", "AIArt", "Shorts"],
             "categoryId": "1"
         },
         "status": {
@@ -186,14 +159,15 @@ def upload_to_youtube(video_file="final_short.mp4", title="Anime Short", descrip
     print(f"Upload Complete! Video ID: {response.get('id')}")
 
 def main():
-    print("--- STARTING 100% FREE 9:16 AI ANIME PIPELINE ---")
+    print("--- STARTING 100% FREE VOICE-OVER AI ANIME PIPELINE ---")
     
-    title, description, image_prompt = generate_anime_concept()
+    title, description, hook, image_prompt = generate_anime_concept()
     print(f"Title: {title}")
+    print(f"Voice Hook: {hook}")
     print(f"AI Prompt: {image_prompt}\n")
 
     download_ai_anime_image(image_prompt)
-    download_phonk_bgm()
+    generate_voiceover(hook)
     create_animated_short()
     upload_to_youtube(title=title, description=description)
 
