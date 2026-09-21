@@ -3,16 +3,12 @@ import sys
 import json
 import re
 import random
-import asyncio
 import requests
 import urllib.parse
-import edge_tts
 from moviepy.editor import (
-    VideoFileClip, 
+    ImageClip, 
     AudioFileClip, 
-    CompositeAudioClip, 
-    concatenate_videoclips, 
-    concatenate_audioclips
+    CompositeAudioClip
 )
 
 from google import genai
@@ -22,194 +18,100 @@ from googleapiclient.http import MediaFileUpload
 
 # Environment Secrets
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 YOUTUBE_CLIENT_ID = os.environ.get("YOUTUBE_CLIENT_ID")
 YOUTUBE_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 
-def generate_content():
+def clean_url(url):
+    """Sanitizes strings to ensure valid HTTP URL formatting."""
+    if isinstance(url, list):
+        url = url[0] if url else ""
+    url = str(url).strip()
+    url = re.sub(r"^[\[\'\"]+", "", url)     url = re.sub(r"[\]\'\"]+$", "", url)
+    return url.strip()
+
+def generate_anime_concept():
     client = genai.Client(api_key=GEMINI_API_KEY)
     
-    topics = [
-        "Lord Krishna's Life Lessons and Mahabharat Wisdom", 
-        "The Loyalty and Sacrifice of Karna in Mahabharat", 
-        "Bheeshma Pitamah's Vow and Duty", 
-        "The Bravery of Abhimanyu in the Chakravyuha", 
-        "Yudhishthira's Powerful Lessons on Dharma",
-        "Draupadi's Courage and Divine Faith",
-        "The Laws of Karma from the Mahabharat Epic"
-    ]
-    chosen_topic = random.choice(topics)
+    prompt = """
+    Create metadata and an image prompt for a viral Anime / Cyberpunk YouTube Short.
     
-    prompt = f"""
-    Create a 30-to-40 second viral YouTube Short about '{chosen_topic}'.
-    Narrate a short story, quote, or life lesson from the Mahabharat.
-    
-    Return strictly valid JSON format with keys:
-    - "title": catchy title in Hindi/Hinglish with hashtags (e.g. #Mahabharat #Krishna #Spiritual #Shorts)
-    - "description": summary in Hindi with relevant hashtags
-    - "search_term": single 1-word ENGLISH string for Pexels background video matching the scene (e.g. warrior, temple, chariot, sunset, fire)
-    - "script": captivating storytelling voiceover text written STRICTLY IN DEVANAGARI HINDI (हिंदी script) (approx 50-65 words). Ensure natural Hindi grammar.
-    
-    Do not add markdown formatting or extra text outside JSON.
+    Return strictly JSON format with keys:
+    - "title": Catchy title with trending hashtags (e.g. #Anime #Cyberpunk #Phonk #Shorts)
+    - "description": Short engaging summary with hashtags
+    - "image_prompt": Detailed English description for an AI anime art generator (e.g. 'futuristic samurai warrior in neon Tokyo rain, glowing eyes, cyberpunk aesthetic, masterpiece, highly detailed, 8k resolution, cinematic lighting')
     """
 
-    print("Generating script using gemini-3.6-flash...")
-    try:
-        res = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
-    except Exception as e:
-        raise RuntimeError(f"gemini-3.6-flash model failed: {e}")
+    print("Generating anime concept using gemini-3.6-flash...")
+    res = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=prompt
+    )
+    
+    text = res.text.strip()
+    if text.startswith("```json"): text = text[7:]
+    if text.startswith("```"): text = text[3:]
+    if text.endswith("```"): text = text[:-3]
+    
+    data = json.loads(text.strip())
+    return str(data["title"]), str(data["description"]), str(data["image_prompt"])
 
-    if not res or not res.text:
-        raise RuntimeError("gemini-3.6-flash returned an empty response.")
+def download_ai_anime_image(prompt, output_file="anime_art.jpg"):
+    print(f"Generating 9:16 AI Anime art for prompt: '{prompt}'...")
+    
+    encoded_prompt = urllib.parse.quote(f"{prompt}, vertical portrait aspect ratio 9:16, masterpiece, highly detailed anime art style")
+    image_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}?width=1080&height=1920&nologo=true"
+    
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    resp = requests.get(image_url, headers=headers, timeout=60)
+    
+    if resp.status_code == 200:
+        with open(output_file, "wb") as f:
+            f.write(resp.content)
+        print("9:16 AI image downloaded successfully.")
+    else:
+        raise RuntimeError(f"Failed to generate AI image. HTTP Status: {resp.status_code}")
 
-    response_text = res.text.strip()
-
-    # Clean JSON response if wrapped in markdown fences
-    if response_text.startswith("```json"):
-        response_text = response_text[7:]
-    if response_text.startswith("```"):
-        response_text = response_text[3:]
-    if response_text.endswith("```"):
-        response_text = response_text[:-3]
-    
-    data = json.loads(response_text.strip())
-    
-    # Clean search_term string to avoid list/bracket issues
-    search_term = data.get("search_term", "temple")
-    if isinstance(search_term, list):
-        search_term = search_term[0] if len(search_term) > 0 else "temple"
-    search_term = str(search_term).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
-    
-    return str(data["title"]), str(data["description"]), str(search_term), str(data["script"])
-
-async def generate_voiceover(text, output_file="voice.mp3"):
-    print("Generating Hindi voiceover with Edge-TTS...")
-    
-    # Strip quotes, dashes, and special characters that break Edge-TTS SSML parsing
-    clean_text = re.sub(r"['\"`“”‘’\-\[\]\(\)\{\}\!]", " ", text)
-    clean_text = " ".join(clean_text.split())
-    
-    voices = ["hi-IN-MadhurNeural", "hi-IN-SwaraNeural"]
-    
-    for voice in voices:
-        try:
-            print(f"Trying voice: {voice}...")
-            communicate = edge_tts.Communicate(clean_text, voice)
-            await communicate.save(output_file)
-            
-            if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-                print(f"Voiceover successfully generated using {voice}.")
-                return
-        except Exception as e:
-            print(f"Voice {voice} failed with error: {e}")
-            
-    raise RuntimeError("Failed to generate voiceover with all available Hindi voices.")
-
-def download_trending_bgm(output_file="trending_bgm.mp3"):
-    print("Downloading royalty-free dramatic instrumental BGM...")
-    bgm_urls = [
-        "[https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a7322d.mp3](https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a7322d.mp3)",
-        "[https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3](https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3)",
-        "[https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3](https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3)"
+def download_phonk_bgm(output_file="phonk_bgm.mp3"):
+    print("Downloading royalty-free Phonk track...")
+    phonk_urls = [
+        "[https://cdn.pixabay.com/download/audio/2023/04/12/audio_13b0c51cf9.mp3](https://cdn.pixabay.com/download/audio/2023/04/12/audio_13b0c51cf9.mp3)",
+        "[https://cdn.pixabay.com/download/audio/2022/11/06/audio_c1e2e13a44.mp3](https://cdn.pixabay.com/download/audio/2022/11/06/audio_c1e2e13a44.mp3)",
+        "[https://cdn.pixabay.com/download/audio/2023/02/28/audio_b2d2db7e1d.mp3](https://cdn.pixabay.com/download/audio/2023/02/28/audio_b2d2db7e1d.mp3)"
     ]
     
-    selected_url = str(random.choice(bgm_urls)).strip()
+    selected_url = clean_url(random.choice(phonk_urls))
     headers = {"User-Agent": "Mozilla/5.0"}
     
-    try:
-        resp = requests.get(selected_url, headers=headers, timeout=30)
-        if resp.status_code == 200:
-            with open(output_file, "wb") as f:
-                f.write(resp.content)
-            print("Successfully downloaded background music.")
-            return True
-        else:
-            print(f"Failed to download BGM, status code: {resp.status_code}")
-            return False
-    except Exception as e:
-        print(f"Could not download BGM: {e}")
-        return False
-
-def download_background_video(search_term, output_file="background.mp4"):
-    if not PEXELS_API_KEY:
-        raise ValueError("PEXELS_API_KEY environment variable is missing or empty!")
-
-    clean_term = urllib.parse.quote(str(search_term).strip())
-    print(f"Searching Pexels for stock footage: {search_term} (URL encoded: {clean_term})...")
-    
-    headers = {"Authorization": PEXELS_API_KEY.strip()}
-    api_url = f"[https://api.pexels.com/videos/search?query=](https://api.pexels.com/videos/search?query=){clean_term}&per_page=5&orientation=portrait"
-    
-    resp = requests.get(str(api_url), headers=headers)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Pexels API failed with status {resp.status_code}: {resp.text}")
-        
-    data = resp.json()
-    if not data.get("videos"):
-        print(f"No vertical videos found for '{search_term}'. Falling back to 'temple'...")
-        fallback_url = "[https://api.pexels.com/videos/search?query=temple&per_page=5&orientation=portrait](https://api.pexels.com/videos/search?query=temple&per_page=5&orientation=portrait)"
-        data = requests.get(str(fallback_url), headers=headers).json()
-
-    video = random.choice(data["videos"])
-    video_files = video["video_files"]
-    download_url = str(video_files[0]["link"])
-    
-    for vf in video_files:
-        if vf.get("width") and vf.get("height") and vf["height"] > vf["width"]:
-            download_url = str(vf["link"])
-            break
-
-    print("Downloading stock video footage...")
-    v_resp = requests.get(download_url)
-    with open(output_file, "wb") as f:
-        f.write(v_resp.content)
-
-def create_final_video(video_file="background.mp4", audio_file="voice.mp3", bgm_file="trending_bgm.mp3", output_file="final_short.mp4"):
-    print("Editing video with MoviePy...")
-    voice = AudioFileClip(audio_file)
-    video = VideoFileClip(video_file)
-
-    # Trim/loop video to match Hindi voice length
-    if video.duration < voice.duration:
-        loops = int(voice.duration / video.duration) + 1
-        video = concatenate_videoclips([video] * loops)
-    video = video.subclip(0, voice.duration)
-
-    # Mix low volume BGM if downloaded
-    if os.path.exists(bgm_file):
-        print("Mixing low-volume BGM with Hindi voiceover...")
-        try:
-            bgm = AudioFileClip(bgm_file)
-            if bgm.duration < voice.duration:
-                loops = int(voice.duration / bgm.duration) + 1
-                bgm = concatenate_audioclips([bgm] * loops)
-            
-            # Set BGM volume to 12% so Hindi narration is clear
-            bgm = bgm.subclip(0, voice.duration).volumex(0.12)
-            final_audio = CompositeAudioClip([voice, bgm])
-        except Exception as e:
-            print(f"Error mixing audio ({e}), using voiceover only...")
-            final_audio = voice
+    resp = requests.get(selected_url, headers=headers, timeout=30)
+    if resp.status_code == 200:
+        with open(output_file, "wb") as f:
+            f.write(resp.content)
+        print("Phonk BGM downloaded successfully.")
     else:
-        print("No BGM found, proceeding with Hindi voiceover only...")
-        final_audio = voice
+        raise RuntimeError(f"Failed to download BGM, status code: {resp.status_code}")
 
-    final_video = video.set_audio(final_audio)
+def create_animated_short(image_file="anime_art.jpg", bgm_file="phonk_bgm.mp3", output_file="final_short.mp4", duration=15):
+    print("Converting 9:16 image to motion video with dynamic zoom...")
     
+    bgm = AudioFileClip(bgm_file).subclip(0, duration)
+    clip = ImageClip(image_file).set_duration(duration)
+
+    # Apply dynamic 3% per second slow-zoom effect
+    animated_clip = clip.resize(lambda t: 1 + 0.03 * t)
+    animated_clip = animated_clip.set_position(('center', 'center'))
+
+    final_video = animated_clip.set_audio(bgm)
     final_video.write_videofile(
         output_file, 
         codec="libx264", 
         audio_codec="aac", 
-        fps=24,
+        fps=30,
         logger=None
     )
-    print("Final video created successfully.")
+    print("Video rendered successfully.")
 
-def upload_to_youtube(video_file="final_short.mp4", title="Shorts", description=""):
+def upload_to_youtube(video_file="final_short.mp4", title="Anime Short", description=""):
     print("Authenticating with YouTube API...")
     creds = Credentials(
         token=None,
@@ -225,8 +127,8 @@ def upload_to_youtube(video_file="final_short.mp4", title="Shorts", description=
         "snippet": {
             "title": title[:95],
             "description": description,
-            "tags": ["Mahabharat", "HindiFacts", "Spiritual", "Shorts"],
-            "categoryId": "22"
+            "tags": ["AnimeEdits", "Phonk", "Cyberpunk", "AIArt", "Shorts"],
+            "categoryId": "1"
         },
         "status": {
             "privacyStatus": "public",
@@ -246,27 +148,15 @@ def upload_to_youtube(video_file="final_short.mp4", title="Shorts", description=
     print(f"Upload Complete! Video ID: {response.get('id')}")
 
 def main():
-    print("--- STARTING HINDI AUTOMATED SHORTS PIPELINE ---")
+    print("--- STARTING 100% FREE 9:16 AI ANIME PIPELINE ---")
     
-    # 1. Content Generation in Hindi using gemini-3.6-flash
-    title, description, search_term, script = generate_content()
+    title, description, image_prompt = generate_anime_concept()
     print(f"Title: {title}")
-    print(f"Pexels Search Term: {search_term}")
-    print(f"Hindi Script: {script}\n")
+    print(f"AI Prompt: {image_prompt}\n")
 
-    # 2. Hindi Voiceover
-    asyncio.run(generate_voiceover(script))
-
-    # 3. Download Background Music
-    download_trending_bgm()
-
-    # 4. Download Video
-    download_background_video(search_term)
-
-    # 5. Render Video
-    create_final_video()
-
-    # 6. YouTube Upload
+    download_ai_anime_image(image_prompt)
+    download_phonk_bgm()
+    create_animated_short()
     upload_to_youtube(title=title, description=description)
 
     print("--- PIPELINE FINISHED SUCCESSFULLY ---")
