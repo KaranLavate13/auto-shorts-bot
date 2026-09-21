@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import random
+import time
 import requests
 import urllib.parse
 from moviepy.editor import (
@@ -11,6 +12,7 @@ from moviepy.editor import (
 )
 
 from google import genai
+from google.genai import types
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -29,7 +31,18 @@ def sanitize_to_str(val):
     return s.strip("[]'\" \t\n\r")
 
 def generate_anime_concept():
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    # Configure retry options to gracefully handle 503 Server Errors
+    retry_config = types.HttpOptions(
+        retry_options=types.HttpRetryOptions(
+            attempts=5,
+            initial_delay=2.0,
+            max_delay=30.0,
+            http_status_codes=[408, 429, 500, 502, 503, 504]
+        ),
+        timeout=60000
+    )
+    
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=retry_config)
     
     prompt = """
     Create metadata and an image prompt for a viral Anime / Cyberpunk YouTube Short.
@@ -40,12 +53,25 @@ def generate_anime_concept():
     - "image_prompt": Detailed English description for an AI anime art generator (e.g. 'futuristic samurai warrior in neon Tokyo rain, glowing eyes, cyberpunk aesthetic, masterpiece, highly detailed, 8k resolution, cinematic lighting')
     """
 
-    print("Generating anime concept using gemini-3.6-flash...")
-    res = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=prompt
-    )
-    
+    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
+    res = None
+
+    for model_name in models_to_try:
+        try:
+            print(f"Generating anime concept using {model_name}...")
+            res = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+            if res and res.text:
+                break
+        except Exception as e:
+            print(f"Warning: {model_name} failed with error: {e}. Trying fallback model...")
+            time.sleep(3)
+
+    if not res or not res.text:
+        raise RuntimeError("Failed to generate content from Gemini API across all attempted models.")
+
     text = res.text.strip()
     if text.startswith("```json"):
         text = text[7:]
